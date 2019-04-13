@@ -4,7 +4,7 @@ import redis.clients.jedis.JedisPool;
 
 public class JedisTest {
 
-    private static JedisPool pool = new JedisPool("localhost",3123);
+    private static JedisPool pool = new JedisPool("100.64.109.133",6379);
 
     @Test
     public void confDataTest(){
@@ -14,8 +14,9 @@ public class JedisTest {
     @Test
     public void addDataTest(){
         Jedis resource = pool.getResource();
-        resource.append("xx1","xx");
+        resource.set("xx1","xx111");
         resource.close();
+        pool.close();
     }
 
     @Test
@@ -23,5 +24,25 @@ public class JedisTest {
         Jedis resource = pool.getResource();
         String xx = resource.get("xx1");
         System.out.println(xx);
+        resource.close();
+        pool.close();
+    }
+
+    @Test
+    public void pingTest(){
+        Jedis resource = pool.getResource();
+        String ping = resource.ping();
+        System.out.println(ping);
+        resource.close();
+        pool.close();
+    }
+    public static void main(String[] args){
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Jedis resource = pool.getResource();
+                System.out.println(resource);
+            }
+        }).start();
     }
 }

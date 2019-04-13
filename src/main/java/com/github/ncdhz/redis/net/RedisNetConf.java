@@ -13,7 +13,6 @@ public class RedisNetConf extends JedisPoolConfig {
     private Properties conf= System.getProperties();
 
     public RedisNetConf(){
-
         this.setTestWhileIdle(true);
         this.setMinEvictableIdleTimeMillis(60000L);
         this.setTimeBetweenEvictionRunsMillis(30000L);
