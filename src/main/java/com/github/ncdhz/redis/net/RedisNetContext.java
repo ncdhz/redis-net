@@ -1,23 +1,21 @@
 package com.github.ncdhz.redis.net;
 
-import com.github.ncdhz.redis.util.RedisPoolUtils;
-import com.github.ncdhz.redis.util.RedisUtils;
+import com.github.ncdhz.redis.cache.Redis;
+import com.github.ncdhz.redis.cache.RedisUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.JedisPoolConfig;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * RedisNet默认实现类
  * @author majunlong
  */
-public class RedisNetContext implements RedisNet {
+public class RedisNetContext implements RedisNet{
 
-    private Properties conf= System.getProperties();
 
     private Logger logger = LoggerFactory.getLogger(RedisNetContext.class);
     
@@ -26,15 +24,26 @@ public class RedisNetContext implements RedisNet {
     private static final String HOST_SPLIT = "\\|";
 
     private static final String HOST_PORT_SPLIT = ":";
-    
-    RedisNetContext(RedisNetConf conf){
-        initRedisNet(conf);
+
+    private Redis redis;
+
+
+    public static RedisNet getRedisNet(RedisNetConf conf){
+        return new RedisNetContext(conf);
     }
+
+    private RedisNetContext(RedisNetConf conf){
+        initRedisNet(conf);
+        redis = new RedisUtils(conf);
+    }
+
+
 
     /**
      * 初始化RedisNet
+     * @param conf
      */
-    private void initRedisNet(JedisPoolConfig redisNetConf) {
+    private void initRedisNet(RedisNetConf conf) {
         String urls = (String) conf.get("redis.net.url");
         if (urls==null||"".equals(urls.trim())){
             logger.error("[redis.net.url] is null or '',Please configure reasonably [redis.net.url]");
@@ -56,26 +65,24 @@ public class RedisNetContext implements RedisNet {
                 hostAndPort.add(ipAndPort);
 
             }
-
             redisNetUrl.add(hostAndPort);
-            // 在redisPool 里面添加一套 （可以是去中心分布式的） redis 数据库
-            RedisPoolUtils.set(hostAndPort,redisNetConf);
         }
         conf.put("redis.net.url",redisNetUrl);
     }
 
+
     @Override
     public String set(String key, String value) {
-        return (String) RedisUtils.set(key,value);
+        return (String) redis.set(key,value);
     }
 
     @Override
     public String get(String key) {
-        return RedisUtils.get(key);
+        return (String) redis.get(key);
     }
 
     @Override
     public void close() {
-        RedisPoolUtils.close();
+        redis.close();
     }
 }

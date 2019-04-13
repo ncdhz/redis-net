@@ -1,5 +1,6 @@
 package com.github.ncdhz.redis.util;
 
+import com.github.ncdhz.redis.net.RedisNetConf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
@@ -13,75 +14,92 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * @author majunlong
  */
-public class RedisPoolUtils {
+public class RedisPoolUtils implements RedisPool {
 
     private static Logger logger = LoggerFactory.getLogger(RedisPoolUtils.class);
+
+    private RedisNetConf conf;
     /**
      * 存放未失效的JedisPool
      */
-    private static Map<Integer,List<RedisPool>> goodsRedisPool = new ConcurrentHashMap<>();
+    private Map<Integer, List<RedisPool>> goodsRedisPool = new ConcurrentHashMap<>();
     /**
      * 存放失效的JedisPool
      */
-    private static List<RedisPool> badRedisPool = new CopyOnWriteArrayList<>();
+    private List<RedisPool> badRedisPool = new CopyOnWriteArrayList<>();
     /**
      * 用于随机获取一个 Jedis 的随机数生成器
      */
     private static Random randomRedisPoolNum = new Random();
 
-    private static volatile boolean close = false;
+    /**
+     * 当 close 为false时缓存池正常开启 当close为true时缓存池退出
+     */
+    private volatile boolean close = false;
 
     /**
      * 用于计数JedisPool 的编号
      */
-    private static int count = 1;
+    private int count = 1;
 
-    private static RedisThreadPool redisThreadPool = RedisThreadPool.getRedisThreadPool();
+    private RedisThreadPool redisThreadPool = new RedisThreadPool(10);
 
 
-    static {
+    public RedisPoolUtils(RedisNetConf conf) {
+        this.conf = conf;
+        List<List<String[]>> hostAndUrls = (List<List<String[]>>) conf.get("redis.net.url");
+        for (List<String[]> hostAndUrl : hostAndUrls) {
+            set(hostAndUrl,conf);
+        }
         checkBadPool();
         checkGoodPool();
     }
+
+    /**
+     * 获取线程池
+     * @return 返回线程池
+     */
+    @Override
+    public RedisThreadPool getRedisThreadPool() {
+        return redisThreadPool;
+    }
+
     /**
      * 用于检查好的连接池里面的数据是否已经挂掉
      */
-    private static void checkGoodPool() {
-        redisThreadPool.execute(new Runnable() {
-            @Override
-            public void run() {
-                String redisPoolTimeSys = System.getProperty("redis.good.pool.time");
-                if (redisPoolTimeSys==null||"".equals(redisPoolTimeSys)){
-                    redisPoolTimeSys = "1000";
-                    System.setProperty("redis.good.pool.time",redisPoolTimeSys);
-                }
-                Integer redisPoolTime = null;
+    private void checkGoodPool() {
+        redisThreadPool.execute(() -> {
+            String redisPoolTimeSys = conf.getProperty("redis.good.pool.time");
+            if (redisPoolTimeSys == null || "".equals(redisPoolTimeSys)) {
+                redisPoolTimeSys = "1000";
+                System.setProperty("redis.good.pool.time", redisPoolTimeSys);
+            }
+            Integer redisPoolTime = null;
+            try {
+                redisPoolTime = Integer.valueOf(redisPoolTimeSys);
+            } catch (Exception e) {
+                logger.error("[redis.good.pool.time={}] Non-standard configuration", redisPoolTimeSys);
                 try {
-                    redisPoolTime = Integer.valueOf(redisPoolTimeSys);
-                }catch (Exception e){
-                    logger.error("[redis.good.pool.time={}] Non-standard configuration",redisPoolTimeSys);
-                    try {
-                        throw new RedisPoolTimeException("[redis.good.pool.time="+redisPoolTimeSys+"] Non-standard configuration");
-                    }catch (RedisPoolTimeException e1){
-                        e1.printStackTrace();
-                        System.exit(0);
+                    throw new RedisPoolTimeException("[redis.good.pool.time=" + redisPoolTimeSys + "] Non-standard configuration");
+                } catch (RedisPoolTimeException e1) {
+                    e1.printStackTrace();
+                    System.exit(0);
+                }
+            }
+
+            while (!isClose()) {
+                for (List<RedisPool> value : goodsRedisPool.values()) {
+                    for (RedisPool redisPool : value) {
+                        getRedis(value, redisPool);
                     }
                 }
-
-                while (!RedisPoolUtils.isClose()) {
-                    for (List<RedisPool> value : goodsRedisPool.values()) {
-                        for (RedisPool redisPool : value) {
-                            getRedis(value,redisPool);
-                        }
-                    }
-                    if (goodsRedisPool.size()==0){
-                        Pool2Zero();
-                    }
-                    try {
-                        Thread.sleep(redisPoolTime);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                if (goodsRedisPool.size() == 0) {
+                    poolToZero();
+                }
+                try {
+                    Thread.sleep(redisPoolTime);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
                 }
             }
         });
@@ -90,38 +108,35 @@ public class RedisPoolUtils {
     /**
      * 用于检查坏的连接池里面的数据是否已经恢复
      */
-    private static void checkBadPool(){
-        redisThreadPool.execute(new Runnable() {
-            @Override
-            public void run() {
-                String redisPoolTimeSys = System.getProperty("redis.bad.pool.time");
-                if (redisPoolTimeSys==null||"".equals(redisPoolTimeSys)){
-                    redisPoolTimeSys = "1000";
-                    System.setProperty("redis.bad.pool.time",redisPoolTimeSys);
-                }
-                Integer redisPoolTime = null;
+    private void checkBadPool() {
+        redisThreadPool.execute(() -> {
+            String redisPoolTimeSys = conf.getProperty("redis.bad.pool.time");
+            if (redisPoolTimeSys == null || "".equals(redisPoolTimeSys)) {
+                redisPoolTimeSys = "1000";
+                System.setProperty("redis.bad.pool.time", redisPoolTimeSys);
+            }
+            Integer redisPoolTime = null;
+            try {
+                redisPoolTime = Integer.valueOf(redisPoolTimeSys);
+            } catch (Exception e) {
+                logger.error("[redis.bad.pool.time={}] Non-standard configuration", redisPoolTimeSys);
                 try {
-                    redisPoolTime = Integer.valueOf(redisPoolTimeSys);
-                }catch (Exception e){
-                    logger.error("[redis.bad.pool.time={}] Non-standard configuration",redisPoolTimeSys);
-                    try {
-                        throw new RedisPoolTimeException("[redis.bad.pool.time="+redisPoolTimeSys+"] Non-standard configuration");
-                    }catch (RedisPoolTimeException e1){
-                        e1.printStackTrace();
-                        System.exit(0);
+                    throw new RedisPoolTimeException("[redis.bad.pool.time=" + redisPoolTimeSys + "] Non-standard configuration");
+                } catch (RedisPoolTimeException e1) {
+                    e1.printStackTrace();
+                    System.exit(0);
+                }
+            }
+            while (!isClose()) {
+                for (RedisPool redisPool : badRedisPool) {
+                    if (redisPool.isActivity()) {
+                        set(redisPool, redisPool.getNumber());
                     }
                 }
-                while (!RedisPoolUtils.isClose()) {
-                    for (RedisPool redisPool : badRedisPool) {
-                        if (redisPool.isActivity()){
-                            set(redisPool,redisPool.getNumber());
-                        }
-                    }
-                    try {
-                        Thread.sleep(redisPoolTime);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                try {
+                    Thread.sleep(redisPoolTime);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
                 }
             }
         });
@@ -129,25 +144,26 @@ public class RedisPoolUtils {
 
     /**
      * 从RedisPool中获取Jedis
+     *
      * @return 一个Jedis
      */
-    public static Jedis getRedis(){
-        if (goodsRedisPool.size()==0){
-            Pool2Zero();
+    public Jedis getRedis() {
+        if (goodsRedisPool.size() == 0) {
+            poolToZero();
         }
         Set<Integer> countAll = goodsRedisPool.keySet();
 
         int allNum = randomRedisPoolNum.nextInt(countAll.size());
         Integer count = countAll.toArray(new Integer[0])[allNum];
         List<RedisPool> redisPools = goodsRedisPool.get(count);
-        while (redisPools.size()!=0){
+        while (redisPools.size() != 0) {
             int redisNum = randomRedisPoolNum.nextInt(redisPools.size());
             RedisPool redisPool = redisPools.get(redisNum);
-            if (redisPool.isClosed()){
+            if (redisPool.isClosed()) {
                 redisPools.remove(redisPool);
-            }else {
+            } else {
                 Jedis redis = getRedis(redisPools, redisPool);
-                if (redis!=null){
+                if (redis != null) {
                     return redis;
                 }
             }
@@ -157,15 +173,15 @@ public class RedisPoolUtils {
     }
 
     /**
-     *  如果好的 pool 已经没有了
-     *  就会调用此方法
+     * 如果好的 pool 已经没有了
+     * 就会调用此方法
      */
-    private static void Pool2Zero(){
+    private void poolToZero() {
         try {
             close();
             logger.error("Redis connector empty，Check that your Redis database is open or that your configuration is correct");
             throw new RedisPoolNullException("Redis connector empty，Check that your Redis database is open or that your configuration is correct");
-        }catch (Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
             System.exit(0);
         }
@@ -173,31 +189,33 @@ public class RedisPoolUtils {
 
     /**
      * 通过地址和端口获取redis
+     *
      * @param host 地址
      * @param port 端口
      * @return 一个 jedis 或者 null
      */
-    public static Jedis getRedis(String host,Integer port){
+    @Override
+    public Jedis getRedis(String host, Integer port) {
 
         for (List<RedisPool> value : goodsRedisPool.values()) {
             for (RedisPool redisPool : value) {
                 String host1 = redisPool.getHost();
                 Integer port1 = redisPool.getPort();
-                if (host.equals(host1)&&port.equals(port1)){
-                    return getRedis(value,redisPool);
+                if (host.equals(host1) && port.equals(port1)) {
+                    return getRedis(value, redisPool);
                 }
             }
         }
         return null;
     }
 
-    private static Jedis getRedis(List<RedisPool> redisPools,RedisPool redisPool){
+    private Jedis getRedis(List<RedisPool> redisPools, RedisPool redisPool) {
         JedisPool jedisPool = redisPool.getJedisPool();
         try {
             Jedis resource = jedisPool.getResource();
             resource.ping();
             return resource;
-        }catch (Exception e){
+        } catch (Exception e) {
             redisPools.remove(redisPool);
             badRedisPool.add(redisPool);
         }
@@ -207,60 +225,73 @@ public class RedisPoolUtils {
     /**
      * 用于关闭RedisPool
      */
-    public static void close() {
+    @Override
+    public void close() {
         for (List<RedisPool> redisPools : goodsRedisPool.values()) {
             close(redisPools);
         }
         close(badRedisPool);
         setClose(true);
-        RedisThreadPool.getRedisThreadPool().shutdown();
+        redisThreadPool.shutdown();
     }
 
-    private static void close(Collection<RedisPool> redisPools){
+    private void close(Collection<RedisPool> redisPools) {
         for (RedisPool redisPool : redisPools) {
             redisPool.close();
         }
     }
+
     /**
      * 构建redisPool 时使用
+     *
      * @param hostAndPorts host 和 port 的集合
      * @param redisNetConf redis 的配置参数
      */
-    public static void set(List<String[]> hostAndPorts, JedisPoolConfig redisNetConf) {
+    public void set(List<String[]> hostAndPorts, JedisPoolConfig redisNetConf) {
         List<RedisPool> redisPools = new CopyOnWriteArrayList<>();
-        for (String[]  hostAndPort: hostAndPorts) {
+        for (String[] hostAndPort : hostAndPorts) {
             String host = hostAndPort[0].trim();
             Integer port = Integer.valueOf(hostAndPort[1].trim());
             JedisPool jedisPool = new JedisPool(redisNetConf, host, port);
             RedisPool redisPool = new RedisPool(count, jedisPool, host, port);
             redisPools.add(redisPool);
         }
-        goodsRedisPool.put(count++,redisPools);
+        goodsRedisPool.put(count++, redisPools);
     }
 
-    private static void set(RedisPool redisPool,Integer number){
+    private void set(RedisPool redisPool, Integer number) {
         List<RedisPool> redisPools = goodsRedisPool.get(number);
-        if (redisPools==null){
+        if (redisPools == null) {
             redisPools = new CopyOnWriteArrayList<>();
             redisPools.add(redisPool);
         }
         redisPools.add(redisPool);
 
-        goodsRedisPool.put(number,redisPools);
+        goodsRedisPool.put(number, redisPools);
     }
 
 
-
-    public static boolean isClose() {
+    /**
+     * 判断 redisPool 是否关闭
+     *
+     * @return false or true
+     */
+    @Override
+    public boolean isClose() {
         return close;
     }
 
-    public static void setClose(boolean close) {
-        RedisPoolUtils.close = close;
+    /**
+     * 设置 redisPool的关闭参数
+     *
+     * @param close true 是关闭 false 是不关闭 默认不关闭
+     */
+    private void setClose(boolean close) {
+        this.close = close;
     }
 
 
-    static class RedisPool{
+    static class RedisPool {
         /**
          * JedisPool 的编号
          */
@@ -275,15 +306,15 @@ public class RedisPoolUtils {
         private Integer port;
 
 
-        boolean isActivity(){
+        boolean isActivity() {
             try {
                 Jedis resource = jedisPool.getResource();
                 String ping = resource.ping();
-                if (ping==null){
+                if (ping == null) {
                     return false;
                 }
                 resource.close();
-            }catch (Exception e){
+            } catch (Exception e) {
                 return false;
             }
             return true;
@@ -297,13 +328,13 @@ public class RedisPoolUtils {
             this.port = port;
         }
 
-        void close(){
-            if (!jedisPool.isClosed()){
+        void close() {
+            if (!jedisPool.isClosed()) {
                 jedisPool.close();
             }
         }
 
-        boolean isClosed(){
+        boolean isClosed() {
             return jedisPool.isClosed();
         }
 

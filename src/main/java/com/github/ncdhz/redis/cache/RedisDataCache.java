@@ -1,5 +1,7 @@
 package com.github.ncdhz.redis.cache;
 
+import com.github.ncdhz.redis.net.RedisNetConf;
+import com.github.ncdhz.redis.util.RedisPool;
 import com.github.ncdhz.redis.util.RedisPoolUtils;
 import com.github.ncdhz.redis.util.RedisThreadPool;
 import org.slf4j.Logger;
@@ -15,35 +17,45 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class RedisDataCache implements DataCache{
 
-    private static DataCache dataCache = new RedisDataCache();
 
     private static Logger logger = LoggerFactory.getLogger(RedisDataCache.class);
     /**
      * redis data 的第一级缓存
      * 此缓存中的数据还没来得及处理完成
      */
-    private static Map<String,RedisData> redisDataCache1 = new ConcurrentHashMap<>();
+    private Map<String,RedisData> redisDataCache1 = new ConcurrentHashMap<>();
     /**
      * redis data 的第二级缓存
      * 此缓存中的数据是已经处理完成的
      */
-    private static LinkedHashMap<String,Object> redisDataCache2 = new LinkedHashMap<>();
+    private LinkedHashMap<String,Object> redisDataCache2 = new LinkedHashMap<>();
 
-    private static Properties conf = System.getProperties();
-
-    private static List<List<String[]>> hostAndUrl = (List<List<String[]>>) conf.get("redis.net.url");
+    private RedisNetConf conf;
 
 
     private static Random random = new Random();
 
-    private static Integer redisCacheDataNumber;
+    private Integer redisCacheDataNumber;
 
-    static {
+    private RedisPool redisPool;
+
+    private RedisThreadPool redisThreadPool;
+
+    RedisDataCache(RedisNetConf conf){
+        this.conf = conf;
+        redisPool = new RedisPoolUtils(conf);
+        redisThreadPool = redisPool.getRedisThreadPool();
+        initCacheDataNumber();
+        initRedisCache();
+    }
+
+
+    private void initCacheDataNumber(){
 
         String redisCacheDataNumberSys = conf.getProperty("redis.cache.data.number");
         if (redisCacheDataNumberSys==null||"".equals(redisCacheDataNumberSys)){
             redisCacheDataNumberSys = "5000";
-            System.setProperty("redis.cache.data.number",redisCacheDataNumberSys);
+            conf.setProperty("redis.cache.data.number",redisCacheDataNumberSys);
         }
         try {
             redisCacheDataNumber = Integer.valueOf(redisCacheDataNumberSys);
@@ -56,15 +68,14 @@ public class RedisDataCache implements DataCache{
                 System.exit(0);
             }
         }
+    }
 
-        RedisThreadPool.getRedisThreadPool().execute(new Runnable() {
-            private  RedisDataCache dataCache= (RedisDataCache) RedisDataCache.getDataCache();
-            @Override
-            public void run() {
-                String redisCacheTimeSys = System.getProperty("redis.cache.time");
+    private void initRedisCache(){
+        redisThreadPool.execute(()-> {
+                String redisCacheTimeSys = conf.getProperty("redis.cache.time");
                 if (redisCacheTimeSys==null||"".equals(redisCacheTimeSys)) {
                     redisCacheTimeSys = "1000";
-                    System.setProperty("redis.cache.time",redisCacheTimeSys);
+                    conf.setProperty("redis.cache.time",redisCacheTimeSys);
                 }
                 Integer redisCacheTime = null;
                 try {
@@ -78,11 +89,11 @@ public class RedisDataCache implements DataCache{
                         System.exit(0);
                     }
                 }
-                while (!RedisPoolUtils.isClose()){
+                while (!redisPool.isClose()){
                     for (String key : redisDataCache1.keySet()) {
                         RedisData redisData = redisDataCache1.get(key);
-                        if (dataCache.CacheProcessing(key, redisData)){
-                            dataCache.setRedisDataCache2(key,redisData.getData());
+                        if (cacheProcessing(key, redisData)){
+                            setRedisDataCache2(key,redisData.getData());
                             redisDataCache1.remove(key);
                         }
                     }
@@ -93,21 +104,13 @@ public class RedisDataCache implements DataCache{
                     }
                 }
             }
-        });
-    }
-
-    public static LinkedHashMap<String, Object> getRedisDataCache2() {
-        return redisDataCache2;
-    }
-
-    public static Map<String, RedisData> getRedisDataCache1() {
-        return redisDataCache1;
+        );
     }
 
     /**
      * 添加元素到第二级缓存如果 缓存满了删除最后一个缓存元素
      */
-    public void setRedisDataCache2(String key,Object value) {
+    private void setRedisDataCache2(String key,Object value) {
         redisDataCache2.put(key,value);
         if(redisDataCache2.size()==redisCacheDataNumber){
             Set<String> keys = redisDataCache2.keySet();
@@ -116,17 +119,8 @@ public class RedisDataCache implements DataCache{
         }
     }
 
-    private RedisDataCache(){}
 
 
-
-
-    /**
-     * 获取 DataCache 的单例
-     */
-    public static DataCache getDataCache() {
-        return dataCache;
-    }
 
     @Override
     public Object get(String key) {
@@ -144,6 +138,7 @@ public class RedisDataCache implements DataCache{
 
     @Override
     public Object set(String key, Object value,RedisCommand command) {
+        List<List<String[]>> hostAndUrl = (List<List<String[]>>) conf.get("redis.net.url");
         RedisData redisData = new RedisData(value,command,hostAndUrl);
         redisDataCache1.put(key,redisData);
         return value;
@@ -153,11 +148,11 @@ public class RedisDataCache implements DataCache{
     /**
      * 用于处理缓存数据
      */
-    private boolean CacheProcessing(String key, RedisData redisData) {
+    private boolean cacheProcessing(String key, RedisData redisData) {
         List<List<String[]>> hostAndUrls = redisData.getHostAndUrl();
         for (List<String[]> hostAndUrl : hostAndUrls) {
             String[] hostUrl = hostAndUrl.get(random.nextInt(hostAndUrl.size()));
-            Jedis redis = RedisPoolUtils.getRedis(hostUrl[0].trim(), Integer.valueOf(hostUrl[1].trim()));
+            Jedis redis = redisPool.getRedis(hostUrl[0].trim(), Integer.valueOf(hostUrl[1].trim()));
             if (redis!=null) {
                 redis.set(key, (String) redisData.getData());
                 hostAndUrls.remove(hostAndUrl);
@@ -165,6 +160,13 @@ public class RedisDataCache implements DataCache{
             }
         }
         return hostAndUrls.size()==0;
+    }
+
+
+
+    @Override
+    public RedisPool getRedisPool() {
+        return redisPool;
     }
 
     class RedisData{

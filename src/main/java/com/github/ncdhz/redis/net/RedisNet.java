@@ -9,7 +9,7 @@ public interface RedisNet{
      * 添加数据到redis中
      * @param key 数据的name
      * @param value 数据的具体类容
-     * @return
+     * @return 返回插入数据的值
      */
     String set(String key,String value);
 

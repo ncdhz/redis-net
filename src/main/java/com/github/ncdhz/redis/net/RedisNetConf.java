@@ -3,29 +3,28 @@ package com.github.ncdhz.redis.net;
 import redis.clients.jedis.JedisPoolConfig;
 
 import java.util.Properties;
-
 /**
  * redis-net 的配置类
  * @author majunlong
  */
 public class RedisNetConf extends JedisPoolConfig {
 
-    private Properties conf= System.getProperties();
-
+    private Properties conf= new Properties();
+    /**
+     * 初始化配置
+     */
     public RedisNetConf(){
-        this.setTestWhileIdle(true);
-        this.setMinEvictableIdleTimeMillis(60000L);
-        this.setTimeBetweenEvictionRunsMillis(30000L);
-        this.setNumTestsPerEvictionRun(-1);
+        super();
     }
 
     public RedisNetConf(String key,String value){
-        this();
+        super();
         conf.put(key,value);
     }
 
     public RedisNetConf(Properties conf){
-        System.setProperties(conf);
+        super();
+        this.conf = conf;
     }
 
     /**
@@ -39,11 +38,19 @@ public class RedisNetConf extends JedisPoolConfig {
         return this;
     }
 
-    /**
-     * 获取RedisNet
-     */
-    public RedisNet getRedisNet(){
-        return new RedisNetContext(this);
+    public Object get(String key) {
+        return conf.get(key);
     }
 
+    public void put(String key, Object value) {
+        conf.put(key,value);
+    }
+
+    public String getProperty(String key) {
+        return conf.getProperty(key);
+    }
+
+    public void setProperty(String key, String value) {
+        conf.setProperty(key,value);
+    }
 }

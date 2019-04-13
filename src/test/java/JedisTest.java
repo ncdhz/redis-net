@@ -4,10 +4,11 @@ import redis.clients.jedis.JedisPool;
 
 public class JedisTest {
 
-    private static JedisPool pool = new JedisPool("100.64.109.133",6379);
+    private static JedisPool pool = new JedisPool("localhost",8001);
 
     @Test
     public void confDataTest(){
+        new JedisPool();
         new JedisPool();
     }
 
