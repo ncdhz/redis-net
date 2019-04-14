@@ -23,12 +23,12 @@ public class RedisDataCache implements DataCache{
      * redis data 的第一级缓存
      * 此缓存中的数据还没来得及处理完成
      */
-    private Map<String,RedisData> redisDataCache1 = new ConcurrentHashMap<>();
+    private static Map<String,RedisData> redisDataCache1 = new ConcurrentHashMap<>();
     /**
      * redis data 的第二级缓存
      * 此缓存中的数据是已经处理完成的
      */
-    private LinkedHashMap<String,Object> redisDataCache2 = new LinkedHashMap<>();
+    private static LinkedHashMap<String,Object> redisDataCache2 = new LinkedHashMap<>();
 
     private RedisNetConf conf;
 
@@ -47,6 +47,14 @@ public class RedisDataCache implements DataCache{
         redisThreadPool = redisPool.getRedisThreadPool();
         initCacheDataNumber();
         initRedisCache();
+    }
+
+    public static Map<String,RedisData> getRedisDataCache1() {
+        return redisDataCache1;
+    }
+
+    public static LinkedHashMap<String, Object> getRedisDataCache2() {
+        return redisDataCache2;
     }
 
 
@@ -72,18 +80,18 @@ public class RedisDataCache implements DataCache{
 
     private void initRedisCache(){
         redisThreadPool.execute(()-> {
-                String redisCacheTimeSys = conf.getProperty("redis.cache.time");
-                if (redisCacheTimeSys==null||"".equals(redisCacheTimeSys)) {
-                    redisCacheTimeSys = "1000";
-                    conf.setProperty("redis.cache.time",redisCacheTimeSys);
+                String redisCacheTimeStr = conf.getProperty("redis.cache.time");
+                if (redisCacheTimeStr==null||"".equals(redisCacheTimeStr)) {
+                    redisCacheTimeStr = "1000";
+                    conf.setProperty("redis.cache.time",redisCacheTimeStr);
                 }
                 Integer redisCacheTime = null;
                 try {
-                    redisCacheTime = Integer.valueOf(redisCacheTimeSys);
+                    redisCacheTime = Integer.valueOf(redisCacheTimeStr);
                 }catch (Exception e){
-                    logger.error("[redis.cache.time={}] Non-standard configuration",redisCacheTimeSys);
+                    logger.error("[redis.cache.time={}] Non-standard configuration",redisCacheTimeStr);
                     try {
-                        throw new RedisCacheTimeException("[redis.cache.time="+redisCacheTimeSys+"] Non-standard configuration");
+                        throw new RedisCacheTimeException("[redis.cache.time="+redisCacheTimeStr+"] Non-standard configuration");
                     }catch (RedisCacheTimeException r){
                         r.printStackTrace();
                         System.exit(0);
@@ -138,7 +146,7 @@ public class RedisDataCache implements DataCache{
 
     @Override
     public Object set(String key, Object value,RedisCommand command) {
-        List<List<String[]>> hostAndUrl = (List<List<String[]>>) conf.get("redis.net.url");
+        List<List<String[]>> hostAndUrl = conf.getAllHostAndPort();
         RedisData redisData = new RedisData(value,command,hostAndUrl);
         redisDataCache1.put(key,redisData);
         return value;

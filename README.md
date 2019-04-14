@@ -2,9 +2,11 @@
 redis.net.url localhost:8001|localhost:9001
 多个数据库用,隔开
 
-redis.database 0 默认为0号数据库 用于指定操作的数据库
+redis.database.time.out 2000 数据库默认连接超时时间
 
-redis.password 默认没有
+redis.database 0|0 默认为0号数据库 用于指定操作的数据库
+
+redis.password pas|pas 默认没有
 
 redis.bad.pool.time 1000 用于检测坏的连接连接池 
 

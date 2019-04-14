@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisPoolConfig;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +22,10 @@ public class RedisPoolUtils implements RedisPool {
      * 存放未失效的JedisPool
      */
     private Map<Integer, List<RedisPool>> goodsRedisPool = new ConcurrentHashMap<>();
+    /**
+     * 检测密码是否为空
+     */
+    private static final String PASSWORD_NULL = "null";
     /**
      * 存放失效的JedisPool
      */
@@ -44,16 +47,56 @@ public class RedisPoolUtils implements RedisPool {
 
     private RedisThreadPool redisThreadPool = new RedisThreadPool(10);
 
+    private Integer databaseTimeOut;
 
     public RedisPoolUtils(RedisNetConf conf) {
         this.conf = conf;
-        List<List<String[]>> hostAndUrls = (List<List<String[]>>) conf.get("redis.net.url");
-        for (List<String[]> hostAndUrl : hostAndUrls) {
-            set(hostAndUrl,conf);
+        databaseTimeOut = initDatabaseTimeOut(conf);
+        List<List<RedisNetConf.RedisDatabase>> redisDatabases = conf.getAllRedisDatabase();
+        for (List<RedisNetConf.RedisDatabase> redisDatabase : redisDatabases) {
+            set(redisDatabase);
         }
         checkBadPool();
         checkGoodPool();
     }
+    private Integer initDatabaseTimeOut(RedisNetConf conf){
+        String outTimeStr = conf.getProperty("redis.database.time.out");
+        if (outTimeStr==null||"".equals(outTimeStr)){
+            outTimeStr = "2000";
+        }
+        try {
+            return Integer.valueOf(outTimeStr);
+        }catch (Exception e){
+            initTimeErr("redis.database.time.out",outTimeStr);
+        }
+        return null;
+    }
+    /**
+     * 构建redisPool 时使用
+     *
+     * @param redisDatabases redis database 一些基本配置
+     */
+    private void set(List<RedisNetConf.RedisDatabase> redisDatabases) {
+        List<RedisPool> redisPools = new CopyOnWriteArrayList<>();
+        for (RedisNetConf.RedisDatabase redisDatabase : redisDatabases) {
+            Integer port = redisDatabase.getPort();
+            String host = redisDatabase.getHost();
+            String password = redisDatabase.getPassword();
+            Integer database = redisDatabase.getDatabase();
+            password = passwordIsNull(password)?null:password;
+            database = database==null?0:database;
+
+            JedisPool jedisPool =new JedisPool(conf,host,port,databaseTimeOut,password,database);
+            RedisPool redisPool = new RedisPool(count, jedisPool, host, port);
+            redisPools.add(redisPool);
+        }
+        goodsRedisPool.put(count++, redisPools);
+    }
+
+    private boolean passwordIsNull(String password){
+        return password==null||"".equals(password)||password.toLowerCase().equals(PASSWORD_NULL);
+    }
+
 
     /**
      * 获取线程池
@@ -69,22 +112,16 @@ public class RedisPoolUtils implements RedisPool {
      */
     private void checkGoodPool() {
         redisThreadPool.execute(() -> {
-            String redisPoolTimeSys = conf.getProperty("redis.good.pool.time");
-            if (redisPoolTimeSys == null || "".equals(redisPoolTimeSys)) {
-                redisPoolTimeSys = "1000";
-                System.setProperty("redis.good.pool.time", redisPoolTimeSys);
+            String redisPoolTimeStr = conf.getProperty("redis.good.pool.time");
+            if (redisPoolTimeStr == null || "".equals(redisPoolTimeStr)) {
+                redisPoolTimeStr = "1000";
+                System.setProperty("redis.good.pool.time", redisPoolTimeStr);
             }
             Integer redisPoolTime = null;
             try {
-                redisPoolTime = Integer.valueOf(redisPoolTimeSys);
+                redisPoolTime = Integer.valueOf(redisPoolTimeStr);
             } catch (Exception e) {
-                logger.error("[redis.good.pool.time={}] Non-standard configuration", redisPoolTimeSys);
-                try {
-                    throw new RedisPoolTimeException("[redis.good.pool.time=" + redisPoolTimeSys + "] Non-standard configuration");
-                } catch (RedisPoolTimeException e1) {
-                    e1.printStackTrace();
-                    System.exit(0);
-                }
+                initTimeErr("redis.good.pool.time",redisPoolTimeStr);
             }
 
             while (!isClose()) {
@@ -97,6 +134,7 @@ public class RedisPoolUtils implements RedisPool {
                     poolToZero();
                 }
                 try {
+                    assert redisPoolTime != null;
                     Thread.sleep(redisPoolTime);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
@@ -105,27 +143,30 @@ public class RedisPoolUtils implements RedisPool {
         });
     }
 
+    private void initTimeErr(String name,String value){
+        try {
+            logger.error("[{}={}] Non-standard configuration", name,value);
+            throw new RedisPoolTimeException("["+name+"=" + value + "] Non-standard configuration");
+        }catch (RedisPoolTimeException e){
+            e.printStackTrace();
+            System.exit(0);
+        }
+    }
     /**
      * 用于检查坏的连接池里面的数据是否已经恢复
      */
     private void checkBadPool() {
         redisThreadPool.execute(() -> {
-            String redisPoolTimeSys = conf.getProperty("redis.bad.pool.time");
-            if (redisPoolTimeSys == null || "".equals(redisPoolTimeSys)) {
-                redisPoolTimeSys = "1000";
-                System.setProperty("redis.bad.pool.time", redisPoolTimeSys);
+            String redisPoolTimeStr = conf.getProperty("redis.bad.pool.time");
+            if (redisPoolTimeStr == null || "".equals(redisPoolTimeStr)) {
+                redisPoolTimeStr = "1000";
+                System.setProperty("redis.bad.pool.time", redisPoolTimeStr);
             }
             Integer redisPoolTime = null;
             try {
-                redisPoolTime = Integer.valueOf(redisPoolTimeSys);
+                redisPoolTime = Integer.valueOf(redisPoolTimeStr);
             } catch (Exception e) {
-                logger.error("[redis.bad.pool.time={}] Non-standard configuration", redisPoolTimeSys);
-                try {
-                    throw new RedisPoolTimeException("[redis.bad.pool.time=" + redisPoolTimeSys + "] Non-standard configuration");
-                } catch (RedisPoolTimeException e1) {
-                    e1.printStackTrace();
-                    System.exit(0);
-                }
+                initTimeErr("redis.bad.pool.time",redisPoolTimeStr);
             }
             while (!isClose()) {
                 for (RedisPool redisPool : badRedisPool) {
@@ -134,6 +175,7 @@ public class RedisPoolUtils implements RedisPool {
                     }
                 }
                 try {
+                    assert redisPoolTime!=null;
                     Thread.sleep(redisPoolTime);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
@@ -241,23 +283,7 @@ public class RedisPoolUtils implements RedisPool {
         }
     }
 
-    /**
-     * 构建redisPool 时使用
-     *
-     * @param hostAndPorts host 和 port 的集合
-     * @param redisNetConf redis 的配置参数
-     */
-    public void set(List<String[]> hostAndPorts, JedisPoolConfig redisNetConf) {
-        List<RedisPool> redisPools = new CopyOnWriteArrayList<>();
-        for (String[] hostAndPort : hostAndPorts) {
-            String host = hostAndPort[0].trim();
-            Integer port = Integer.valueOf(hostAndPort[1].trim());
-            JedisPool jedisPool = new JedisPool(redisNetConf, host, port);
-            RedisPool redisPool = new RedisPool(count, jedisPool, host, port);
-            redisPools.add(redisPool);
-        }
-        goodsRedisPool.put(count++, redisPools);
-    }
+
 
     private void set(RedisPool redisPool, Integer number) {
         List<RedisPool> redisPools = goodsRedisPool.get(number);

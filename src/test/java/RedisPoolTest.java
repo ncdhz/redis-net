@@ -9,7 +9,8 @@ public class RedisPoolTest {
 
     public static void main(String[] args){
         RedisNetConf conf = new RedisNetConf()
-                .set("redis.net.url","localhost:8001|localhost:9001|116.208.95.229:6379");
+                .set("redis.net.url","localhost:8001|localhost:9001|27.22.135.40:6379")
+                .set("redis.database","1|2|3");
         RedisNet redisNet = RedisNetContext.getRedisNet(conf);
 
         for (int i = 0; i < 1000; i++) {

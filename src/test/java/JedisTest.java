@@ -1,10 +1,11 @@
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 public class JedisTest {
 
-    private static JedisPool pool = new JedisPool("localhost",8001);
+    private static JedisPool pool = new JedisPool(new JedisPoolConfig(),"localhost",8001,2000,null,2);
 
     @Test
     public void confDataTest(){
