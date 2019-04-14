@@ -1,4 +1,4 @@
-package com.github.ncdhz.redis.cache;
+package com.github.ncdhz.redis.util.cache;
 
 /**
  * redisCache 缓存刷入数据库的时间

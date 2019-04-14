@@ -1,4 +1,4 @@
-package com.github.ncdhz.redis.cache;
+package com.github.ncdhz.redis.util.cache;
 
 /**
  * redis 二级缓存的个数 如果个数解析错误会抛出

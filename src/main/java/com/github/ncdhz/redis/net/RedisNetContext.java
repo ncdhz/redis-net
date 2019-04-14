@@ -1,193 +1,152 @@
 package com.github.ncdhz.redis.net;
 
-import com.github.ncdhz.redis.cache.Redis;
-import com.github.ncdhz.redis.cache.RedisUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.github.ncdhz.redis.handler.*;
+import com.github.ncdhz.redis.util.cache.RedisCache;
+import com.github.ncdhz.redis.util.cache.RedisNetCache;
+import com.github.ncdhz.redis.util.pool.RedisNetPool;
+import com.github.ncdhz.redis.util.pool.RedisPool;
+import redis.clients.jedis.Jedis;
 
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Random;
 
 /**
  * RedisNet默认实现类
  * @author majunlong
  */
-public class RedisNetContext implements RedisNet{
+public class RedisNetContext implements RedisContext{
 
+    private final RedisConf conf;
 
-    private Logger logger = LoggerFactory.getLogger(RedisNetContext.class);
-    
-    private static final String URL_SPLIT = ",";
-
-    private static final String ADDRESS_SPLIT = "\\|";
-
-    private static final String HOST_PORT_SPLIT = ":";
-
-    private static final String DEFAULT_REDIS_HOST = "localhost";
-
-    private static final Integer DEFAULT_REDIS_PORT = 6379;
-
-
+    private RedisBinary redisBinary;
 
     private Redis redis;
 
+    private RedisClient redisClient;
 
-    public static RedisNet getRedisNet(RedisNetConf conf){
+    public static synchronized RedisContext getRedisNet(RedisNetConf conf){
         return new RedisNetContext(conf);
     }
+    private static Random random = new Random();
 
-    private RedisNetContext(RedisNetConf conf){
-        initRedisNet(conf);
-        redis = new RedisUtils(conf);
-    }
-
-
-
+    private RedisThreadPool threadPool;
     /**
      * 初始化RedisNet
      * @param conf redis-net 的配置类
      */
-    private void initRedisNet(RedisNetConf conf) {
-        initNetUrl(conf);
-        initDataBase(conf);
-        initPassword(conf);
-    }
+    private RedisNetContext(RedisConf conf){
+        this.conf = conf;
 
-    private void initPassword(RedisNetConf conf) {
-        String passwordAll = null;
-        try {
-            passwordAll = conf.getProperty("redis.password");
-            if (passwordAll!=null&&!"".equals(passwordAll)){
-                String[]  passwordAddress= passwordAll.split(ADDRESS_SPLIT);
-                if (passwordAddress.length!=1){
-                    int i = 0;
-                    for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                        String passwordAddress1 = passwordAddress[i++];
-                        String[] passwordUrl = passwordAddress1.split(URL_SPLIT);
-                        if (passwordUrl.length!=1){
-                            for (int j = 0; j < redisDatabases.size(); j++) {
-                                redisDatabases.get(j).setPassword(passwordUrl[j]);
-                            }
-                        }else {
-                            for (RedisNetConf.RedisDatabase redisDatabase : redisDatabases) {
-                                redisDatabase.setPassword(passwordUrl[0]);
-                            }
-                        }
-                    }
-                }else {
-                    String[] passwordUrl = passwordAll.split(URL_SPLIT);
-                    if (passwordUrl.length!=1){
-                        for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                            for (int i = 0; i <redisDatabases.size(); i++) {
-                                redisDatabases.get(i).setPassword(passwordUrl[i]);
-                            }
-                        }
-                    }else {
-                        for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                            for (RedisNetConf.RedisDatabase redisDatabase : redisDatabases) {
-                                redisDatabase.setPassword(passwordAll);
-                            }
-                        }
-                    }
-                }
-
-            }
-        }catch (Exception e){
-            initErr("redis.password",passwordAll);
+        RedisDatabaseConf databaseConf = (RedisDatabaseConf) conf;
+        if (!databaseConf.isInit()){
+            RedisInit redisInit= new RedisNetInit(conf);
+            redisInit.initNetUrl().initDatabase().initPassword();
+            databaseConf.setInit(true);
         }
-    }
+        threadPool= new RedisThreadPool(10);
 
-    private void initDataBase(RedisNetConf conf) {
-        String databaseAll = null;
-        try {
-            databaseAll = conf.getProperty("redis.database");
-            if (databaseAll!=null&&!"".equals(databaseAll)){
-                String[]  databaseAddress= databaseAll.split(ADDRESS_SPLIT);
-                if (databaseAddress.length!=1){
-                    int i = 0;
-                    for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                        String databaseAddress1 = databaseAddress[i++];
-                        String[] databaseURL = databaseAddress1.split(URL_SPLIT);
-                        if (databaseURL.length!=1){
-                            for (int j = 0; j < redisDatabases.size(); j++) {
-                                redisDatabases.get(j).setDatabase(Integer.valueOf(databaseURL[j]));
-                            }
-                        }else {
-                            for (RedisNetConf.RedisDatabase redisDatabase : redisDatabases) {
-                                redisDatabase.setDatabase(Integer.valueOf(databaseURL[0]));
-                            }
-                        }
-                    }
-                }else {
-                    String[] databaseUrl = databaseAll.split(URL_SPLIT);
-                    if (databaseUrl.length!=1){
-                        for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                            for (int i = 0; i <redisDatabases.size(); i++) {
-                                redisDatabases.get(i).setDatabase(Integer.valueOf(databaseUrl[i]));
-                            }
-                        }
-                    }else {
-                        for (List<RedisNetConf.RedisDatabase> redisDatabases : conf) {
-                            for (RedisNetConf.RedisDatabase redisDatabase : redisDatabases) {
-                                redisDatabase.setDatabase(Integer.valueOf(databaseAll));
-                            }
-                        }
-                    }
+        RedisPool redisPool = new RedisNetPool(conf,threadPool);
+
+        RedisCache redisCache = new RedisNetCache(conf,threadPool,(key, redisData)->{
+            List<List<String[]>> hostAndUrls = redisData.getHostAndUrl();
+            for (List<String[]> hostAndUrl : hostAndUrls) {
+                String[] hostUrl = hostAndUrl.get(random.nextInt(hostAndUrl.size()));
+                Jedis redis = redisPool.getRedis(hostUrl[0].trim(), Integer.valueOf(hostUrl[1].trim()));
+                if (redis!=null) {
+                    redis.set(key,redisData.getData().toString());
+                    redis.close();
+                    hostAndUrls.remove(hostAndUrl);
                 }
             }
-        }catch (Exception e){
-            initErr("redis.database",databaseAll);
-        }
-    }
+            return hostAndUrls.size()==0;
+        });
 
-    private void initNetUrl(RedisNetConf conf) {
-        String urls = null;
-        try{
-            urls = conf.getProperty("redis.net.url");
-            if (urls==null||"".equals(urls.trim())){
-                conf.setRedisDatabase(DEFAULT_REDIS_HOST, DEFAULT_REDIS_PORT);
-                return;
-            }
-            String[]  url= urls.trim().split(ADDRESS_SPLIT);
-            // 用于把 redis.net.url 的参数存到 conf
-            for (String u : url) {
-                String[] host = u.trim().split(URL_SPLIT);
-                List<RedisNetConf.RedisDatabase> redisDatabases = new CopyOnWriteArrayList<>();
-                for (String h : host) {
-                    String[] ipAndPort = h.trim().split(HOST_PORT_SPLIT);
-                    redisDatabases.add(conf.getRedisDatabase(ipAndPort[0].trim(),Integer.valueOf(ipAndPort[1].trim())));
-                }
-                conf.setRedisDatabase(redisDatabases);
-            }
-        }catch (Exception e){
-            initErr("redis.net.url",urls);
-        }
-
-    }
-
-    private void initErr(String name,String value){
-        try {
-            logger.error("[{}={}] configure err，URL should include host and port",name,value);
-            throw new RedisNetConnectException("["+name+"="+value+"] configure err，URL should include host and port");
-        }catch (RedisNetConnectException e){
-            e.printStackTrace();
-            System.exit(0);
-        }
+        this.redis = new RedisNet(redisPool,redisCache);
+        this.redisBinary = new RedisNetBinary(redisPool,redisCache);
+        this.redisClient = new RedisNetClient(redisPool,redisCache);
     }
 
 
     @Override
-    public String set(String key, String value) {
-        return (String) redis.set(key,value);
+    public String set(final String key, final String value) {
+        return redis.set(key,value,"xx");
     }
 
     @Override
-    public String get(String key) {
-        return (String) redis.get(key);
+    public String set(final String key, String value, final String nxxx, final String expx, final long time) {
+        return null;
+    }
+
+    @Override
+    public String set(final String key, final String value, final String expx,final long time) {
+        return null;
+    }
+
+    @Override
+    public String set(final String key,final  String value,final String nxxx) {
+        return redis.set(key,value,nxxx);
+    }
+
+    @Override
+    public String set(final byte[] key, final byte[] value) {
+        return redisBinary.set(key,value,"xx".getBytes());
+    }
+
+    @Override
+    public String set(final byte[] key, final byte[] value, final byte[] nxxx) {
+        return redisBinary.set(key,value,nxxx);
+    }
+
+    @Override
+    public String set(final byte[] key, final byte[] value, final byte[] nxxx, final byte[] expx, final long time) {
+        return null;
+    }
+
+    @Override
+    public String set(final byte[] key, final byte[] value, final byte[] nxxx, final byte[] expx, final int time) {
+        return null;
+    }
+
+    @Override
+    public String get(final String key) {
+        return redis.get(key);
+    }
+
+    @Override
+    public byte[] get(final byte[] key) {
+        return redisBinary.get(key);
+    }
+
+    @Override
+    public Boolean exists(String key) {
+        return redis.exists(key);
+    }
+
+    @Override
+    public Long exists(String... keys) {
+        return redis.exists(keys);
+    }
+
+    @Override
+    public Boolean exists(byte[] key) {
+        return redisBinary.exists(key);
+    }
+
+    @Override
+    public Long exists(byte[]... keys) {
+        return redisBinary.exists(keys);
     }
 
     @Override
     public void close() {
-        redis.close();
+        try {
+            Thread.sleep(Integer.valueOf(conf.getProperty("redis.cache.time")));
+            threadPool.shutdown();
+            redisClient.close();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
     }
+
+
 }

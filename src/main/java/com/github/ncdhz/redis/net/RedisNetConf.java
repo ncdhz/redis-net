@@ -11,11 +11,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * redis-net 的配置类
  * @author majunlong
  */
-public class RedisNetConf extends JedisPoolConfig implements Iterable<List<RedisNetConf.RedisDatabase>>{
+public class RedisNetConf extends JedisPoolConfig implements RedisConf,RedisDatabaseConf{
 
     private Properties conf= new Properties();
 
     private List<List<RedisDatabase>> redisDatabase = new CopyOnWriteArrayList<>();
+
+    private boolean init = false;
     /**
      * 初始化配置
      */
@@ -39,120 +41,82 @@ public class RedisNetConf extends JedisPoolConfig implements Iterable<List<Redis
      * @param value 参数值
      * @return 返回配置对象
      */
-    public RedisNetConf set(String key,String value){
+    @Override
+    public RedisConf set(String key, String value){
         conf.put(key,value);
         return this;
     }
 
+    @Override
     public Object get(String key) {
         return conf.get(key);
     }
 
-    public void put(String key, Object value) {
-        conf.put(key,value);
-    }
-
-    public List<List<RedisDatabase>> getAllRedisDatabase(){
-        return redisDatabase;
-    }
-
+    @Override
     public String getProperty(String key) {
         return conf.getProperty(key);
     }
 
-    public void setProperty(String key, String value) {
-        conf.setProperty(key,value);
+    @Override
+    public List<List<RedisDatabase>> getAllRedisDatabase(){
+        return redisDatabase;
     }
 
+
+
+    @Override
     public void setRedisDatabase(RedisDatabase redisDatabase){
-        CopyOnWriteArrayList<RedisDatabase> database = new CopyOnWriteArrayList<>();
-        database.add(redisDatabase);
-        this.redisDatabase.add(database);
+        List<RedisDatabase> redisDatabases = new CopyOnWriteArrayList<>();
+        redisDatabases.add(redisDatabase);
+        setRedisDatabase(redisDatabases);
     }
 
+    @Override
     public void setRedisDatabase(List<RedisDatabase> redisDatabases){
-        redisDatabase.add(redisDatabases);
+        this.redisDatabase.add(redisDatabases);
     }
 
-    public RedisDatabase getRedisDatabase(String host,Integer port){
-        return new RedisDatabase(host,port);
+    @Override
+    public RedisDatabase getRedisDatabase(String host, Integer port){
+        return new RedisNetRedisDatabase(host,port);
     }
 
+    @Override
     public List<List<String[]>> getAllHostAndPort() {
-        List<List<String[]>> allRedisDatabase = new CopyOnWriteArrayList<>();
+        List<List<String[]>> allDatabaseConf = new CopyOnWriteArrayList<>();
+
         for (List<RedisDatabase> redisDatabases : redisDatabase) {
             List<String[]> allHostAllPortToOne = new CopyOnWriteArrayList<>();
-            for (RedisDatabase database : redisDatabases) {
-                String[] hostAndPort = new String[]{database.getHost(),database.getPort().toString()};
-                allHostAllPortToOne.add(hostAndPort);
+            for (RedisDatabase redisDatabase : redisDatabases) {
+                allHostAllPortToOne.add(redisDatabase.getHostAndPort());
             }
-            allRedisDatabase.add(allHostAllPortToOne);
+            allDatabaseConf.add(allHostAllPortToOne);
         }
-        return allRedisDatabase;
+        return allDatabaseConf;
     }
 
+    @Override
     public RedisDatabase getRedisDatabase(){
-        return new RedisDatabase();
+        return new RedisNetRedisDatabase();
     }
 
+    @Override
     public void setRedisDatabase(String host, Integer port) {
-        setRedisDatabase(new RedisDatabase(host,port));
+        setRedisDatabase(new RedisNetRedisDatabase(host,port));
     }
-
-
 
     @Override
     public Iterator<List<RedisDatabase>> iterator() {
         return redisDatabase.iterator();
     }
 
-    public class RedisDatabase{
+    @Override
+    public Boolean isInit(){
+        return init;
+    }
 
-        private String host;
-
-        private Integer port;
-
-        private Integer database;
-
-        private String password;
-
-        public RedisDatabase(String host, Integer port) {
-            this.host = host;
-            this.port = port;
-        }
-
-        public RedisDatabase() {}
-
-        public void setHost(String host) {
-            this.host = host;
-        }
-
-        public void setPort(Integer port) {
-            this.port = port;
-        }
-
-        public void setDatabase(Integer database) {
-            this.database = database;
-        }
-
-        public void setPassword(String password) {
-            this.password = password;
-        }
-
-        public String getHost() {
-            return host;
-        }
-
-        public Integer getPort() {
-            return port;
-        }
-
-        public Integer getDatabase() {
-            return database;
-        }
-
-        public String getPassword() {
-            return password;
-        }
+    @Override
+    public void setInit(boolean init) {
+        this.init = init;
     }
 }

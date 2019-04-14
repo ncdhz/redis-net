@@ -1,4 +1,4 @@
-package com.github.ncdhz.redis.net;
+package com.github.ncdhz.redis.handler;
 
 /**
  * 连接错误
